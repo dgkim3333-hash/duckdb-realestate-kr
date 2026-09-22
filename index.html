@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>부동산 데이터 창고 짓기</title>
+<meta name="description" content="DuckDB 설치법과 국토부 실거래가·건축물대장·공시가격·경매낙찰 3,900만 행을 한 파일에 모은 구성 안내.">
+<meta property="og:title" content="부동산 데이터 창고 짓기">
+<meta property="og:description" content="노트북 한 대로 3,900만 행 다루기 — DuckDB로 한국 부동산 공공데이터를 한 곳에 모으는 방법.">
+<meta property="og:type" content="article">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Noto+Sans+KR:wght@300;400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+  :root{
+    color-scheme:light dark;
+    --paper:#EDEFF1;
+    --card:#F7F8F9;
+    --ink:#16212A;
+    --ink-2:#3D4C57;
+    --muted:#6E7D88;
+    --line:#D3D9DE;
+    --line-soft:#E2E7EB;
+    --seal:#B0432B;
+    --seal-soft:#F0DBD5;
+    --deep:#245D53;
+    --deep-soft:#D9E6E2;
+    --amber:#8A6516;
+
+    --serif:'Gowun Batang', 'Nanum Myeongjo', serif;
+    --sans:'Noto Sans KR', system-ui, -apple-system, sans-serif;
+    --mono:'IBM Plex Mono', 'D2Coding', Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#12181D;
+      --card:#1A2229;
+      --ink:#E4E9ED;
+      --ink-2:#B4C0C9;
+      --muted:#8496A1;
+      --line:#2C3843;
+      --line-soft:#232D36;
+      --seal:#E0785C;
+      --seal-soft:#3A241E;
+      --deep:#69B5A4;
+      --deep-soft:#1B322D;
+      --amber:#D2A344;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#12181D;
+    --card:#1A2229;
+    --ink:#E4E9ED;
+    --ink-2:#B4C0C9;
+    --muted:#8496A1;
+    --line:#2C3843;
+    --line-soft:#232D36;
+    --seal:#E0785C;
+    --seal-soft:#3A241E;
+    --deep:#69B5A4;
+    --deep-soft:#1B322D;
+    --amber:#D2A344;
+  }
+
+  *{box-sizing:border-box}
+  img{max-width:100%}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-weight:350;
+    line-height:1.75;
+    font-size:15px;
+    margin:0;
+    padding-inline:20px;
+    padding-block:0;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:860px;margin:0 auto;padding-block:56px 96px}
+
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 18px;
+  }
+  h1{
+    font-family:var(--serif);font-weight:700;
+    font-size:clamp(34px,6.4vw,52px);line-height:1.18;
+    margin:0 0 20px;text-wrap:balance;letter-spacing:-.01em;
+  }
+  .lede{
+    font-size:17px;line-height:1.8;color:var(--ink-2);
+    max-width:60ch;margin:0 0 4px;
+  }
+  .lede strong{font-weight:500;color:var(--ink)}
+
+  .figures{
+    display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+    background:var(--line);border:1px solid var(--line);
+    margin:40px 0 8px;
+  }
+  .fig{background:var(--card);padding:20px 18px}
+  .fig .n{
+    font-family:var(--mono);font-weight:500;
+    font-size:clamp(20px,3.6vw,27px);line-height:1.1;
+    color:var(--deep);font-variant-numeric:tabular-nums;
+    display:block;margin-bottom:6px;
+  }
+  .fig .l{font-size:12px;color:var(--muted);letter-spacing:.02em}
+  .stamp{
+    font-family:var(--mono);font-size:11px;color:var(--muted);
+    text-align:right;margin:0 0 56px;
+  }
+
+  section{margin-block:0 64px}
+  .shead{
+    display:flex;align-items:baseline;gap:14px;
+    border-bottom:1.5px solid var(--ink);
+    padding-bottom:10px;margin-bottom:26px;
+  }
+  .shead .num{
+    font-family:var(--mono);font-size:12px;color:var(--seal);
+    font-weight:500;flex:none;
+  }
+  h2{
+    font-family:var(--serif);font-weight:700;font-size:25px;
+    margin:0;line-height:1.3;letter-spacing:-.005em;
+  }
+  h3{
+    font-family:var(--sans);font-weight:700;font-size:15px;
+    margin:32px 0 10px;letter-spacing:-.005em;
+  }
+  p{margin:0 0 15px;max-width:66ch}
+  strong{font-weight:500}
+  a{color:var(--deep);text-underline-offset:3px;text-decoration-thickness:1px}
+  a:focus-visible{outline:2px solid var(--seal);outline-offset:2px}
+
+  .aside{
+    border-left:2.5px solid var(--seal);
+    background:var(--seal-soft);
+    padding:16px 18px;margin:24px 0;
+    font-size:14px;line-height:1.7;
+  }
+  .aside p{margin:0;max-width:none}
+  .aside p + p{margin-top:10px}
+  .aside .tag{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--seal);
+    display:block;margin-bottom:6px;font-weight:500;
+  }
+
+  .code{
+    background:var(--ink);color:#E8EDF0;
+    font-family:var(--mono);font-size:12.5px;line-height:1.85;
+    padding:15px 17px;margin:12px 0 20px;
+    overflow-x:auto;white-space:pre;
+    border-radius:2px;
+  }
+  .code .c{color:#8FA3AE}
+  .code .k{color:#8FD4C1}
+  .code .s{color:#E8B88F}
+
+  .tw{overflow-x:auto;margin:20px 0 8px;border:1px solid var(--line)}
+  table{border-collapse:collapse;width:100%;min-width:560px;background:var(--card);font-size:13.5px}
+  caption{
+    text-align:left;font-size:12px;color:var(--muted);
+    padding:11px 14px;background:var(--card);
+    border-bottom:1px solid var(--line);font-family:var(--mono);
+  }
+  th{
+    text-align:left;font-weight:500;font-size:11.5px;
+    letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    padding:10px 14px;border-bottom:1px solid var(--line);
+    white-space:nowrap;
+  }
+  td{padding:10px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  tbody tr.grp td{
+    background:var(--deep-soft);font-weight:500;color:var(--ink);
+    border-bottom:1px solid var(--line);
+  }
+  td .sub{display:block;font-size:12px;color:var(--muted);line-height:1.5;margin-top:2px}
+
+  .srcs{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);margin-top:20px}
+  .src{background:var(--card);padding:15px 17px;display:grid;grid-template-columns:1fr auto;gap:4px 16px;align-items:baseline}
+  .src .nm{font-weight:500;font-size:14px}
+  .src .ur{font-family:var(--mono);font-size:12px;color:var(--deep);word-break:break-all}
+  .src .ds{grid-column:1/-1;font-size:12.5px;color:var(--muted);line-height:1.6}
+
+  .foot{
+    border-top:1.5px solid var(--ink);margin-top:72px;padding-top:20px;
+    font-size:12.5px;color:var(--muted);line-height:1.7;
+  }
+  .foot p{max-width:none;margin:0 0 8px}
+
+  @media (max-width:560px){
+    .wrap{padding-block:40px 72px}
+    .figures{grid-template-columns:1fr}
+    .src{grid-template-columns:1fr}
+    .shead{flex-wrap:wrap;gap:6px 12px}
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <p class="eyebrow">DuckDB · 부동산 공공데이터</p>
+  <h1>노트북 한 대로<br>3,900만 행 다루기</h1>
+  <p class="lede">
+    설치 파일 하나, 데이터 파일 하나. 서버도 계정도 없습니다.
+    국토부 실거래가·건축물대장·공시가격·경매낙찰을
+    <strong>한 곳에 모아 SQL로 물어보는</strong> 방법을 정리했습니다.
+  </p>
+
+  <div class="figures">
+    <div class="fig"><span class="n">2.2 GiB</span><span class="l">파일 하나의 크기</span></div>
+    <div class="fig"><span class="n">83</span><span class="l">테이블 (정본 19개)</span></div>
+    <div class="fig"><span class="n">39,077,775</span><span class="l">행</span></div>
+  </div>
+  <p class="stamp">2026-09-22 기준 · DuckDB 1.5.5</p>
+
+  <section>
+    <div class="shead"><span class="num">01</span><h2>DuckDB가 뭔가</h2></div>
+
+    <p>
+      <strong>엑셀은 100만 행에서 멈춥니다.</strong> 공시가격 한 파일이 1,558만 행입니다.
+      열리지도 않습니다. 그렇다고 데이터베이스 서버를 세우자니 설치·계정·포트가 따라옵니다.
+    </p>
+    <p>
+      DuckDB는 그 사이를 메웁니다. <strong>실행 파일 하나를 내려받아 두 번 클릭하면 끝</strong>입니다.
+      데이터는 <code>npl.duckdb</code> 같은 파일 하나에 들어가고, 그 파일을 USB에 담아 옮기면
+      다른 PC에서 그대로 열립니다. 서버가 없으니 켜고 끌 것도 없습니다.
+    </p>
+    <p>
+      쓰는 말은 SQL입니다. <em>"평택시 안중읍 다가구 주택 매매를 최근 1년치 뽑아 ㎡당 단가 중앙값을 내줘"</em>
+      같은 걸 서너 줄로 씁니다. 1,558만 행을 훑어도 몇 초입니다.
+    </p>
+
+    <div class="aside">
+      <span class="tag">엑셀과 갈리는 지점</span>
+      <p>엑셀은 <strong>보면서 고치는</strong> 도구이고, DuckDB는 <strong>쌓아놓고 물어보는</strong> 창고입니다.
+      둘은 경쟁하지 않습니다. 실제로는 DuckDB에서 조건을 걸어 200행쯤 뽑아낸 뒤, 그걸 엑셀로 열어 보는 식으로 씁니다.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="shead"><span class="num">02</span><h2>설치 — 5분</h2></div>
+
+    <h3>방법 A · 실행 파일 (윈도우, 가장 쉬움)</h3>
+    <p>
+      <a href="https://duckdb.org/install/">duckdb.org/install</a> 에서 Windows를 고르고
+      <code>duckdb_cli-windows-amd64.zip</code>을 받습니다. 압축을 풀면 <code>duckdb.exe</code>
+      하나만 나옵니다. 설치 과정이 없습니다 — 그 파일이 곧 프로그램입니다.
+    </p>
+    <div class="code"><span class="c"># 받은 폴더에서 실행</span>
+duckdb.exe
+
+<span class="c"># 또는 데이터 파일을 지정해서 열기</span>
+duckdb.exe C:\NPL\npl.duckdb</div>
+    <p style="font-size:13.5px;color:var(--muted)">
+      Microsoft Visual C++ 재배포 패키지가 필요합니다. 대부분 PC에 이미 깔려 있고, 없으면 실행할 때 알려줍니다.
+    </p>
+
+    <h3>방법 B · 파워셸 한 줄</h3>
+    <div class="code">powershell -NoExit iex (iwr <span class="s">"https://install.duckdb.org/install.ps1"</span>).Content</div>
+
+    <h3>방법 C · 파이썬에서 쓸 사람</h3>
+    <div class="code">pip install duckdb</div>
+    <p>
+      파이썬으로 쓰면 pandas와 바로 오갑니다. CSV를 읽어 테이블로 만들고 결과를 데이터프레임으로 받는 게 몇 줄입니다.
+    </p>
+
+    <h3>첫 명령 세 개</h3>
+    <div class="code"><span class="c">-- CSV를 읽어 테이블로 만들기 (헤더 자동 인식)</span>
+<span class="k">CREATE TABLE</span> 실거래 <span class="k">AS</span>
+  <span class="k">SELECT</span> * <span class="k">FROM</span> read_csv(<span class="s">'C:/data/아파트매매.csv'</span>);
+
+<span class="c">-- 뭐가 들어있나 보기</span>
+<span class="k">SELECT</span> * <span class="k">FROM</span> 실거래 <span class="k">LIMIT</span> 10;
+<span class="k">DESCRIBE</span> 실거래;
+
+<span class="c">-- 나가기</span>
+.quit</div>
+
+    <div class="aside">
+      <span class="tag">CSV를 미리 정리하지 않아도 됩니다</span>
+      <p><code>read_csv</code>가 구분자·인코딩·컬럼 타입을 알아서 잡습니다.
+      한글 CSV가 깨지면 <code>encoding='utf-8'</code>이나 <code>all_varchar=true</code>를 덧붙이면 대개 해결됩니다.
+      파일 여러 개를 <code>'C:/data/*.csv'</code>처럼 한 번에 읽을 수도 있습니다.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="shead"><span class="num">03</span><h2>지금 들어 있는 자료</h2></div>
+
+    <p>
+      전부 <strong>공개된 공공데이터</strong>입니다. 유료 자료는 경매 낙찰결과 하나뿐입니다.
+      아래 19개가 분석에 쓰는 정본이고, 나머지는 여기서 만들어낸 파생표와 작업용입니다.
+    </p>
+
+    <div class="tw">
+      <table>
+        <caption>정본 19개 · 합계 38,188,084행</caption>
+        <thead>
+          <tr>
+            <th>테이블</th>
+            <th class="n">행수</th>
+            <th>범위 · 메모</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="grp"><td>공시가격</td><td class="n">15,580,435</td><td>전국</td></tr>
+          <tr>
+            <td>주택공시가격<span class="sub">아파트·연립·다세대. 단독·근린주택은 없음</span></td>
+            <td class="n">15,580,435</td>
+            <td>2025.1.1 기준<span class="sub">매년 11월 갱신</span></td>
+          </tr>
+
+          <tr class="grp"><td>건축물대장</td><td class="n">20,788,356</td><td>서울·경기</td></tr>
+          <tr>
+            <td>기본개요<span class="sub">용도지역·지구·구역</span></td>
+            <td class="n">11,566,916</td>
+            <td>2026년 8월분<span class="sub">지역 채움률 10%</span></td>
+          </tr>
+          <tr>
+            <td>층별개요<span class="sub">층 단위 용도·면적. 근생/주거 안분의 근거</span></td>
+            <td class="n">7,292,864</td>
+            <td>면적 결측 0%</td>
+          </tr>
+          <tr>
+            <td>표제부<span class="sub">주용도·사용승인일·연면적·건폐율·용적률</span></td>
+            <td class="n">1,928,576</td>
+            <td>동 단위<span class="sub">위반건축물 칸 없음</span></td>
+          </tr>
+
+          <tr class="grp"><td>실거래가</td><td class="n">1,627,013</td><td>서울·경기 · 최근 1년</td></tr>
+          <tr><td>아파트 전월세</td><td class="n">580,208</td><td rowspan="9" style="vertical-align:top">계약일 2025-09-22<br>~ 2026-09-21<span class="sub">매달 2일 자동 갱신.<br>금액은 원 단위로 저장.</span><span class="sub">★단독·다가구는 번지가 100% 가려져 개별 물건 매칭 불가 — 법정동 단위 ㎡단가로만 씀</span></td></tr>
+          <tr><td>단독·다가구 전월세</td><td class="n">290,144</td></tr>
+          <tr><td>아파트 매매</td><td class="n">241,642</td></tr>
+          <tr><td>연립·다세대 전월세</td><td class="n">202,635</td></tr>
+          <tr><td>오피스텔 전월세</td><td class="n">181,875</td></tr>
+          <tr><td>연립·다세대 매매</td><td class="n">67,419</td></tr>
+          <tr><td>상업·업무용 매매</td><td class="n">26,481</td></tr>
+          <tr><td>오피스텔 매매</td><td class="n">26,152</td></tr>
+          <tr><td>단독·다가구 매매</td><td class="n">10,457</td></tr>
+
+          <tr class="grp"><td>경매 · 공매 낙찰결과</td><td class="n">189,482</td><td>낙찰가 예측의 원천</td></tr>
+          <tr>
+            <td>공매낙찰 (온비드)</td>
+            <td class="n">133,071</td>
+            <td>전국 · 개찰 2026-05-04~09-02<span class="sub">주소 칸이 없어 실거래와 못 붙임</span></td>
+          </tr>
+          <tr>
+            <td>경매낙찰 통합<span class="sub">지지옥션 + 대법원 결합</span></td>
+            <td class="n">33,823</td>
+            <td>서울·경기 · 2026-07-01~09-14<span class="sub">감정가 일치율 99.9%로 검증</span></td>
+          </tr>
+          <tr>
+            <td>경매낙찰 원본 (지지옥션)<span class="sub">응찰자수 확보용 — 유일한 유료 자료</span></td>
+            <td class="n">22,588</td>
+            <td>주간 수집</td>
+          </tr>
+
+          <tr class="grp"><td>참조표</td><td class="n">2,798</td><td>붙이는 데 쓰는 열쇠</td></tr>
+          <tr>
+            <td>법정동코드<span class="sub">시도+시군구+읍면동 → 10자리 코드</span></td>
+            <td class="n">1,203</td>
+            <td>읍면동 단위<span class="sub">★리 단위로 쓰면 조인이 1:N으로 터짐</span></td>
+          </tr>
+          <tr>
+            <td>철도역<span class="sub">역세권 거리 계산용. 좌표 100%</span></td>
+            <td class="n">1,099</td>
+            <td>전국 · 2026-06-30<span class="sub">KTX 전용역 포함</span></td>
+          </tr>
+          <tr>
+            <td>정비사업 (서울)<span class="sub">단계별 인가일 포함</span></td>
+            <td class="n">496</td>
+            <td>2026년 6월말<span class="sub">경기도는 없음</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="aside">
+      <span class="tag">이게 왜 한 곳에 있어야 하나</span>
+      <p>따로 있으면 각각은 그냥 목록입니다. 합쳐야 <strong>질문이 됩니다.</strong></p>
+      <p>건축물대장에서 <em>준공 22년 된 다가구</em>를 고르고 → 실거래가로 그 동네 ㎡단가를 잡고
+      → 철도역 좌표로 도보 8분인지 재고 → 경매 낙찰결과로 <em>이런 물건이 감정가의 몇 %에 떨어지는지</em>를 봅니다.
+      네 번의 조회가 아니라 <strong>한 번의 질의</strong>입니다.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="shead"><span class="num">04</span><h2>어디서 받나</h2></div>
+
+    <p>전부 무료이고 회원가입만 하면 됩니다. 경매 낙찰결과만 유료 사이트입니다.</p>
+
+    <div class="srcs">
+      <div class="src">
+        <span class="nm">국토교통부 실거래가 공개시스템</span>
+        <span class="ur">rt.molit.go.kr</span>
+        <span class="ds">아파트·연립다세대·오피스텔·단독다가구·상업업무용 매매/전월세. <strong>엑셀 말고 CSV로 받을 것.</strong> 한 번에 최대 1년, 시도별로 나눠 받습니다. 유형 탭을 바꾸면 조건이 초기화되니 탭 → 매매/전월세 → 시도 순서로 설정하십시오.</span>
+      </div>
+      <div class="src">
+        <span class="nm">공공데이터포털</span>
+        <span class="ur">data.go.kr</span>
+        <span class="ds">주택 공시가격, 건축물대장(건축HUB), 온비드 공매 결과. 파일로 받는 것과 API로 받는 것 두 가지가 있습니다. 공시가격은 파일이 3GB가 넘으니 다운로드에 시간이 걸립니다.</span>
+      </div>
+      <div class="src">
+        <span class="nm">대법원 법원경매정보</span>
+        <span class="ur">courtauction.go.kr</span>
+        <span class="ds">매각 결과. <strong>조회 창이 7일뿐이라</strong> 주 1회는 받아야 빠지지 않습니다. 응찰자 수는 여기 없습니다.</span>
+      </div>
+      <div class="src">
+        <span class="nm">온비드</span>
+        <span class="ur">onbid.co.kr</span>
+        <span class="ds">캠코 공매. 압류재산·기타일반재산 등 재산 유형이 갈리고 <strong>저감 구조가 경매와 완전히 다릅니다</strong>(경매는 회차당 20~30%, 공매는 1%). 두 자료를 절대 한 표에 합치지 마십시오.</span>
+      </div>
+      <div class="src">
+        <span class="nm">국가철도공단 레일포털</span>
+        <span class="ur">국가철도공단 자료실 · 도시광역철도 역사정보</span>
+        <span class="ds">전국 역 좌표. 환승역은 노선별로 여러 행이라 역 단위로 묶어야 합니다. 역명 끝의 "역"을 떼어내지 않으면 검색이 안 잡힙니다.</span>
+      </div>
+      <div class="src">
+        <span class="nm">서울시 정비사업 정보몽땅</span>
+        <span class="ur">cleanup.seoul.go.kr</span>
+        <span class="ds">재개발·재건축 추진현황. 단계별 인가일이 들어 있는 파일을 받으십시오. 서울만 있고 경기도는 별도 경로입니다.</span>
+      </div>
+      <div class="src">
+        <span class="nm">DuckDB</span>
+        <span class="ur">duckdb.org/install</span>
+        <span class="ds">프로그램 본체. 현재 1.5.5.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="shead"><span class="num">05</span><h2>실제로 쓰는 질의</h2></div>
+
+    <h3>동네 ㎡단가 중앙값</h3>
+    <div class="code"><span class="k">SELECT</span> 법정동, count(*) <span class="k">AS</span> 건수,
+       median(거래금액 / 전용면적)::<span class="k">BIGINT</span> <span class="k">AS</span> ㎡단가
+<span class="k">FROM</span> 실거래_아파트_매매
+<span class="k">WHERE</span> 시군구 <span class="k">LIKE</span> <span class="s">'%평택시%'</span>
+<span class="k">GROUP BY</span> 1 <span class="k">HAVING</span> 건수 >= 10
+<span class="k">ORDER BY</span> ㎡단가 <span class="k">DESC</span>;</div>
+
+    <h3>반경 안의 역까지 거리</h3>
+    <p>위도·경도만 있으면 하버사인 공식으로 직선거리가 나옵니다. 한 번 매크로로 만들어두면 그다음부터는 한 줄입니다.</p>
+    <div class="code"><span class="k">SELECT</span> 역명, 노선명,
+       round(6371000 * 2 * asin(sqrt(
+         pow(sin(radians(위도 - 37.0)/2), 2) +
+         cos(radians(37.0)) * cos(radians(위도)) *
+         pow(sin(radians(경도 - 127.0)/2), 2)
+       ))) <span class="k">AS</span> 거리m
+<span class="k">FROM</span> 철도역 <span class="k">ORDER BY</span> 거리m <span class="k">LIMIT</span> 3;</div>
+
+    <h3>유찰 횟수별 낙찰가율</h3>
+    <div class="code"><span class="k">SELECT</span> 유찰횟수, count(*) <span class="k">AS</span> 표본,
+       median(매각가 * 100.0 / 감정가) <span class="k">AS</span> 낙찰가율
+<span class="k">FROM</span> 경매낙찰_통합
+<span class="k">WHERE</span> 상태 = <span class="s">'매각'</span>
+<span class="k">GROUP BY</span> 1 <span class="k">ORDER BY</span> 1;</div>
+
+    <div class="aside">
+      <span class="tag">겪어보고 아는 함정 셋</span>
+      <p><strong>① 법정동코드를 리 단위로 쓰지 마십시오.</strong> 읍·면은 리마다 코드가 달라, 평택시 팽성읍 하나에 26개가 붙습니다. 그대로 조인하면 24만 행이 40만 행으로 부풀어 오릅니다.</p>
+      <p><strong>② 파일명을 믿지 마십시오.</strong> 국토부 사이트가 과거 조회 결과를 잘못 내려주는 일이 실제로 있었습니다. 파일 안의 검색조건 머리글을 열어 시도·기간·유형을 눈으로 확인하는 게 안전합니다.</p>
+      <p><strong>③ 단독과 다가구를 섞지 마십시오.</strong> 대지 ㎡단가가 3.8배 차이납니다. 섞어서 중앙값을 내면 감정가를 3배 넘게 틀리게 잡습니다.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="shead"><span class="num">06</span><h2>망가뜨리지 않으려면</h2></div>
+
+    <p>
+      전부 파일 하나라는 게 장점이자 약점입니다. <strong>그 파일이 날아가면 전부 날아갑니다.</strong>
+      다만 원천이 공개 데이터라 다시 받으면 복원됩니다 — 잃는 건 시간입니다.
+    </p>
+    <p>
+      파일 복사로 백업하려다 막히는 일이 흔합니다. 프로그램이 파일을 붙잡고 있으면 복사가 안 됩니다.
+      그럴 땐 <code>EXPORT DATABASE</code>를 쓰는 게 낫습니다. 잠금을 타지 않고, 압축돼서 훨씬 작습니다.
+    </p>
+    <div class="code"><span class="c">-- 통째로 내보내기 (2.2GB → 415MB)</span>
+<span class="k">EXPORT DATABASE</span> <span class="s">'D:/백업/npl_20260922'</span> (<span class="k">FORMAT</span> PARQUET, <span class="k">COMPRESSION</span> ZSTD);
+
+<span class="c">-- 되살리기</span>
+<span class="k">IMPORT DATABASE</span> <span class="s">'D:/백업/npl_20260922'</span>;</div>
+    <p style="font-size:13.5px;color:var(--muted)">
+      내보낸 폴더 안의 <code>load.sql</code>에는 절대 경로가 박혀 있습니다.
+      다른 PC에서 복원하려면 그 경로를 먼저 바꿔야 합니다.
+      그리고 <strong>백업은 원본과 다른 물리 디스크에</strong> 두십시오. 같은 디스크면 같이 죽습니다.
+    </p>
+  </section>
+
+  <div class="foot">
+    <p>수치는 2026-09-22 기준 실측입니다. 공시가격은 매년 11월, 실거래가는 매달 갱신되므로 행수는 계속 늘어납니다.</p>
+    <p>건축물대장·실거래가의 결측률과 마스킹 비율은 원자료 자체의 한계입니다 — 단독·다가구 번지 마스킹처럼, 알고 쓰는 것과 모르고 쓰는 것의 차이가 큽니다.</p>
+  </div>
+
+</div>
+
+</body>
+</html>
