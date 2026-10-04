@@ -142,7 +142,7 @@ ORDER BY ㎡단가 DESC;
 
 ---
 
-## 겪어보고 아는 함정 셋
+## 겪어보고 아는 함정 넷
 
 **① 법정동코드를 리 단위로 쓰지 마십시오.**
 읍·면은 리마다 코드가 달라, 평택시 팽성읍 하나에 26개가 붙습니다.
@@ -154,6 +154,10 @@ ORDER BY ㎡단가 DESC;
 
 **③ 단독과 다가구를 섞지 마십시오.**
 대지 ㎡단가가 3.8배 차이납니다. 섞어서 중앙값을 내면 감정가를 3배 넘게 틀리게 잡습니다.
+
+**④ 통째로 교체하면 테이블 설명이 지워집니다.**
+`CREATE OR REPLACE` 는 주석(`COMMENT ON TABLE`)까지 새로 만듭니다. 이 창고는 주석이 `[정본` 으로 시작하는 표를 「정본」으로 셉니다 —
+매달 실거래가를 교체한 뒤 설명을 다시 달지 않으면 정본 19개가 10개로 보입니다. 데이터는 멀쩡한데 경보가 납니다.
 
 **그리고 경매와 공매를 한 표에 합치지 마십시오.**
 저감 구조가 다릅니다 — 경매는 회차당 20~30%, 공매는 1%. 분모가 다른 숫자의 평균은 의미가 없습니다.
@@ -179,10 +183,55 @@ IMPORT DATABASE 'D:/백업/npl_20260922';
 그 경로를 먼저 치환해야 합니다. 그리고 **백업은 원본과 다른 물리 디스크에** 두십시오.
 같은 디스크면 같이 죽습니다.
 
+내보낸 뒤에는 원본과 대조하십시오. 내보내기만 하면 빠진 표가 있어도 모릅니다.
+
+```sql
+-- 백업이 원본과 같은지 대조 — 테이블마다 정확한 행 수로 (다른 DB가 붙어 있어도 이 창고만 셉니다)
+-- ① 원본: 이 창고의 테이블마다 count(*) 하는 질의를 만든다
+SET VARIABLE 원본쿼리 = (
+  SELECT string_agg(
+           format('SELECT ''{}.{}'' AS 테이블, count(*) AS 원본_행 FROM "{}"."{}"',
+                  schema_name, table_name, schema_name, table_name),
+           ' UNION ALL ')
+  FROM duckdb_tables()
+  WHERE database_name = current_database()
+);
+
+-- ② 백업: load.sql 에서 「테이블 ↔ 파일」 짝을 읽고 파일마다 행 수를 붙여 비교
+WITH 원본 AS (
+  SELECT * FROM query(getvariable('원본쿼리'))
+),
+짝 AS (
+  SELECT replace(t, '"', '') AS 이름, regexp_extract(f, '[^/\\]+$') AS 파일
+  FROM (
+    SELECT unnest(regexp_extract_all(content, 'COPY (.+?) FROM ''[^'']+''', 1)) AS t,
+           unnest(regexp_extract_all(content, 'COPY .+? FROM ''([^'']+)''', 1)) AS f
+    FROM read_text('D:/백업/npl_YYYYMMDD/load.sql')
+  )
+),
+백업 AS (
+  SELECT CASE WHEN 이름 LIKE '%.%' THEN 이름 ELSE 'main.' || 이름 END AS 테이블,
+         m.num_rows AS 백업_행
+  FROM 짝
+  LEFT JOIN parquet_file_metadata('D:/백업/npl_YYYYMMDD/*.parquet') m
+         ON regexp_extract(m.file_name, '[^/\\]+$') = 짝.파일
+)
+SELECT coalesce(원본.테이블, 백업.테이블) AS 테이블, 원본_행, 백업_행,
+       CASE WHEN 원본_행 = 백업_행 THEN '같음' ELSE '다름' END AS 판정
+FROM 원본 FULL JOIN 백업 USING (테이블)
+ORDER BY 판정 DESC, 테이블;
+```
+
+`판정` 이 전부 `같음` 이면 백업 검증 통과입니다. 이 대조에서 겪은 함정 세 가지:
+
+- `EXPORT DATABASE` 는 테이블·뷰·매크로는 담지만 **테이블 주석은 담지 않습니다.** 주석을 쓴다면 `COMMENT ON TABLE` 목록을 따로 보관하십시오.
+- 다른 DB를 `ATTACH` 해 둔 상태에서 조건 없이 세면 그 테이블까지 섞입니다. 실제로 93 대 89로 어긋나 백업 실패처럼 보인 적이 있습니다.
+- 원본 행 수를 `duckdb_tables()` 의 `estimated_size` 로 세면 안 됩니다. 추정치라 행을 지운 적이 있는 테이블은 실제보다 크게 나옵니다. 그리고 한글 이름 테이블은 백업 파일 이름이 밑줄(`____.parquet`)로 바뀌므로, 파일 이름이 아니라 `load.sql` 로 짝을 짓습니다.
+
 ---
 
 수치는 2026-09-22 기준 실측입니다.
-공시가격은 매년 11월, 실거래가는 매달 갱신되므로 행수는 계속 늘어납니다.
+공시가격은 매년 11월, 실거래가는 매달 갱신됩니다. **실거래가는 최근 1년만 담기 때문에 매달 오래된 달이 빠져 행수가 줄 수도 있습니다** — 2026-10 갱신 때 1,627,013행이 1,614,401행으로 줄었고, 정상이었습니다.
 
 건축물대장·실거래가의 결측률과 마스킹 비율은 원자료 자체의 한계입니다 —
 단독·다가구 번지 마스킹처럼, 알고 쓰는 것과 모르고 쓰는 것의 차이가 큽니다.
